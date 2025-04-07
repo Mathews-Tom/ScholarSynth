@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Tuple
 
 # LangChain's text splitter
 from langchain.text_splitter import RecursiveCharacterTextSplitter, TextSplitter
@@ -11,6 +11,12 @@ logger = logging.getLogger(__name__)
 # Default configuration values (can be overridden)
 DEFAULT_CHUNK_SIZE: int = 1000
 DEFAULT_CHUNK_OVERLAP: int = 200
+
+# Parent-Child document retriever defaults
+DEFAULT_PARENT_CHUNK_SIZE: int = 2000
+DEFAULT_PARENT_CHUNK_OVERLAP: int = 400
+DEFAULT_CHILD_CHUNK_SIZE: int = 500
+DEFAULT_CHILD_CHUNK_OVERLAP: int = 100
 
 
 def get_text_splitter(
@@ -50,6 +56,58 @@ def get_text_splitter(
             "Failed to initialize RecursiveCharacterTextSplitter.", exc_info=True
         )
         raise RuntimeError("Text splitter initialization failed.") from e
+
+
+def get_parent_child_splitters(
+    parent_chunk_size: int = DEFAULT_PARENT_CHUNK_SIZE,
+    parent_chunk_overlap: int = DEFAULT_PARENT_CHUNK_OVERLAP,
+    child_chunk_size: int = DEFAULT_CHILD_CHUNK_SIZE,
+    child_chunk_overlap: int = DEFAULT_CHILD_CHUNK_OVERLAP,
+) -> Tuple[TextSplitter, TextSplitter]:
+    """
+    Initialize and return text splitters for parent and child document chunking.
+
+    Args:
+        parent_chunk_size (int): Size of parent chunks in characters.
+        parent_chunk_overlap (int): Overlap between parent chunks in characters.
+        child_chunk_size (int): Size of child chunks in characters.
+        child_chunk_overlap (int): Overlap between child chunks in characters.
+
+    Returns:
+        Tuple[TextSplitter, TextSplitter]: Tuple of (parent_splitter, child_splitter).
+    """
+    logger.info(
+        f"Initializing parent splitter with chunk_size={parent_chunk_size}, "
+        f"chunk_overlap={parent_chunk_overlap}"
+    )
+    logger.info(
+        f"Initializing child splitter with chunk_size={child_chunk_size}, "
+        f"chunk_overlap={child_chunk_overlap}"
+    )
+
+    try:
+        # Create parent document splitter
+        parent_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=parent_chunk_size,
+            chunk_overlap=parent_chunk_overlap,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+
+        # Create child document splitter
+        child_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=child_chunk_size,
+            chunk_overlap=child_chunk_overlap,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+
+        return parent_splitter, child_splitter
+    except Exception as e:
+        logger.exception(
+            "Failed to initialize parent-child text splitters.", exc_info=True
+        )
+        raise RuntimeError("Parent-child text splitter initialization failed.") from e
 
 
 # --- Example Usage Function (Optional - can be called from __main__) ---
