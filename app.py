@@ -10,6 +10,8 @@ if str(project_root) not in sys.path:  # Compare string paths
     sys.path.insert(0, str(project_root))
 # --- End path modification ---
 
+from pathlib import Path  # For checking file paths
+
 # Import Streamlit first to potentially avoid configuration conflicts
 import streamlit as st
 from langchain_community.vectorstores import Chroma  # For type hinting
@@ -157,16 +159,19 @@ def get_cached_vector_store(
 
 
 @st.cache_resource
-def get_cached_llm(_config):  # Depends on config
+def get_cached_llm(_config, streaming=True):  # Depends on config
     logger.info("Initializing Language Model...")
     try:
         llm = ChatOpenAI(
             model_name=_config.LLM_MODEL_NAME,
             openai_api_key=_config.OPENAI_API_KEY,
             temperature=0.1,  # Lower temperature for more factual/consistent answers
+            streaming=streaming,  # Enable streaming for token-by-token response
             # max_tokens= # Optional: Limit response length
         )
-        logger.info(f"LLM '{_config.LLM_MODEL_NAME}' initialized successfully.")
+        logger.info(
+            f"LLM '{_config.LLM_MODEL_NAME}' initialized successfully. Streaming: {streaming}"
+        )
         return llm
     except Exception as e:
         logger.error(f"Failed to initialize LLM: {e}", exc_info=True)
@@ -252,7 +257,12 @@ def run_app():
         page_title="AI Literature Review Assistant",
         page_icon="📚",
         layout="wide",  # Or "centered"
+        initial_sidebar_state="expanded",
     )
+
+    # --- Initialize Session State for Conversation History ---
+    if "conversation_history" not in st.session_state:
+        st.session_state.conversation_history = []
 
     st.title("📚 AI Literature Review Assistant")
     st.markdown(
@@ -319,8 +329,73 @@ def run_app():
         st.stop()
         return
 
-    # --- User Input ---
+    # --- Display Conversation History ---
     st.markdown("---")
+    if st.session_state.conversation_history:
+        st.subheader("Conversation History")
+        for i, (q, a, sources) in enumerate(st.session_state.conversation_history):
+            with st.container():
+                st.markdown(f"**Question {i + 1}:** {q}")
+                st.markdown(f"**Answer:** {a}")
+
+                # Display sources with clickable elements
+                if sources:
+                    st.markdown(f"**Sources for Question {i + 1}:**")
+                    for j, doc in enumerate(sources):
+                        source_ref = doc.metadata.get(
+                            "filename", doc.metadata.get("source", "N/A")
+                        )
+                        title = doc.metadata.get("title", "No title")
+
+                        # Create unique keys for this source
+                        content_key = f"content_{i}_{j}"
+                        show_details_key = f"show_details_{i}_{j}"
+
+                        # Create a section for each source with a button to show details
+                        st.markdown(f"**Source {j + 1}:** {title}")
+                        st.markdown(f"*Reference:* {source_ref}")
+
+                        # Initialize session state for this source if not already set
+                        if show_details_key not in st.session_state:
+                            st.session_state[show_details_key] = False
+
+                        # Add a button to toggle source details
+                        if st.button(
+                            f"Toggle Details", key=f"toggle_{show_details_key}"
+                        ):
+                            # Toggle the state
+                            st.session_state[show_details_key] = not st.session_state[
+                                show_details_key
+                            ]
+
+                        # Check if we should show details for this source
+                        if st.session_state[show_details_key]:
+                            # Add metadata if available
+                            if "page" in doc.metadata:
+                                st.markdown(f"**Page:** {doc.metadata['page']}")
+                            if "authors" in doc.metadata:
+                                st.markdown(f"**Authors:** {doc.metadata['authors']}")
+
+                            # Display content
+                            st.text_area(
+                                "Content",
+                                value=doc.page_content,
+                                height=150,
+                                key=content_key,
+                            )
+
+                            # Add a button to view the original document if it's a PDF
+                            if source_ref.endswith(".pdf"):
+                                if st.button(f"View Original PDF", key=f"pdf_{i}_{j}"):
+                                    # This would ideally open the PDF in a new tab or iframe
+                                    st.info(
+                                        f"PDF viewing functionality would open {source_ref}"
+                                    )
+
+                            # We don't need a separate hide button since we have the toggle button
+                st.markdown("---")
+
+    # --- User Input ---
     user_question = st.text_input(
         "Enter your question:",
         placeholder="e.g., What are the main challenges of prompt engineering?",
@@ -329,53 +404,117 @@ def run_app():
     # --- Generate and Display Response ---
     if user_question:
         logger.info(f"Received user question: '{user_question}'")
-        st.markdown("---")
+
+        # Retrieve documents for context
+        with st.spinner(
+            f"Searching relevant documents... (using k={k_value}, search='{search_type}')"
+        ):
+            retrieved_docs = retriever.invoke(user_question)
+
+        # Create a placeholder for the streaming response
         st.subheader("Answer:")
+        answer_placeholder = st.empty()
+
         try:
-            with st.spinner(
-                f"Searching relevant documents and generating answer... (using k={k_value}, search='{search_type}')"
-            ):
-                # Invoke the RAG chain
-                response = rag_chain.invoke(user_question)
-                st.markdown(response)  # Display the LLM's answer
+            # Initialize the response string
+            full_response = ""
 
-                # Optionally display retrieved documents for verification
-                st.markdown("---")
-                with st.expander("Show Retrieved Context Documents"):
-                    # Retrieve documents again using the current retriever settings
-                    retrieved_docs = retriever.invoke(user_question)
-                    if retrieved_docs:
-                        st.markdown(
-                            f"Retrieved {len(retrieved_docs)} chunks for context:"
+            # Stream the response
+            for chunk in rag_chain.stream(user_question):
+                full_response += chunk
+                answer_placeholder.markdown(full_response + "▌")
+
+            # Display the final response without the cursor
+            answer_placeholder.markdown(full_response)
+
+            # Add to conversation history
+            st.session_state.conversation_history.append(
+                (user_question, full_response, retrieved_docs)
+            )
+
+            # Optionally display retrieved documents for verification
+            st.markdown("---")
+
+            # Initialize session state for retrieved documents if not already set
+            if "show_retrieved_docs" not in st.session_state:
+                st.session_state["show_retrieved_docs"] = False
+
+            # Add a button to toggle showing retrieved documents
+            if st.button("Toggle Retrieved Context Documents"):
+                st.session_state["show_retrieved_docs"] = not st.session_state[
+                    "show_retrieved_docs"
+                ]
+
+            # Check if we should show retrieved documents
+            if st.session_state["show_retrieved_docs"]:
+                # We already have the retrieved documents
+                if retrieved_docs:
+                    st.markdown(f"Retrieved {len(retrieved_docs)} chunks for context:")
+                    for i, doc in enumerate(retrieved_docs):
+                        # Access potential retrieval score if available
+                        score = doc.metadata.get("_score", None)
+                        score_str = (
+                            f" (Score: {score:.4f})" if score is not None else ""
                         )
-                        for i, doc in enumerate(retrieved_docs):
-                            # Access potential retrieval score if available (depends on vector store implementation)
-                            score = doc.metadata.get("_score", None)
-                            score_str = (
-                                f" (Score: {score:.4f})" if score is not None else ""
-                            )
-                            st.markdown(f"**Chunk {i + 1}{score_str}**")
 
-                            # Display key metadata
-                            source_ref = doc.metadata.get(
-                                "filename", doc.metadata.get("source", "N/A")
-                            )
-                            st.markdown(f"*Source:* `{source_ref}`")
-                            if "title" in doc.metadata:
-                                st.markdown(f"*Title:* {doc.metadata.get('title')}")
-                            # Add other relevant metadata if desired (e.g., authors)
-                            # if 'authors' in doc.metadata:
-                            #     st.markdown(f"*Authors:* {doc.metadata.get('authors')}")
+                        # Get metadata
+                        source_ref = doc.metadata.get(
+                            "filename", doc.metadata.get("source", "N/A")
+                        )
+                        title = doc.metadata.get("title", "No title")
 
+                        # Create unique keys for this document
+                        doc_content_key = f"doc_content_{i}"
+                        doc_details_key = f"doc_details_{i}"
+
+                        # Create a section for each document
+                        st.markdown(f"**Chunk {i + 1}:** {title}{score_str}")
+                        st.markdown(f"*Source:* {source_ref}")
+
+                        # Initialize session state for this document if not already set
+                        if doc_details_key not in st.session_state:
+                            st.session_state[doc_details_key] = False
+
+                        # Add a button to toggle document details
+                        if st.button(
+                            f"Toggle Document Details", key=f"toggle_{doc_details_key}"
+                        ):
+                            # Toggle the state
+                            st.session_state[doc_details_key] = not st.session_state[
+                                doc_details_key
+                            ]
+
+                        # Check if we should show details for this document
+                        if st.session_state[doc_details_key]:
+                            # Add metadata if available
+                            if "page" in doc.metadata:
+                                st.markdown(f"**Page:** {doc.metadata['page']}")
+                            if "authors" in doc.metadata:
+                                st.markdown(f"**Authors:** {doc.metadata['authors']}")
+
+                            # Display content
                             st.text_area(
-                                f"Content Chunk {i + 1}",
+                                f"Content",
                                 value=doc.page_content,
                                 height=150,
-                                key=f"doc_{i}",
+                                key=doc_content_key,
                             )
-                            st.markdown("---")
-                    else:
-                        st.markdown("No documents were retrieved for this query.")
+
+                            # Add a button to view the original document if it's a PDF
+                            if source_ref.endswith(".pdf"):
+                                if st.button(f"View Original PDF", key=f"pdf_view_{i}"):
+                                    # This would ideally open the PDF in a new tab or iframe
+                                    st.info(
+                                        f"PDF viewing functionality would open {source_ref}"
+                                    )
+
+                            # We don't need a separate hide button since we have the toggle button
+
+                        st.markdown("---")
+
+                    # We don't need a separate hide button since we have the toggle button above
+                else:
+                    st.markdown("No documents were retrieved for this query.")
 
         except Exception as e:
             logger.error(
