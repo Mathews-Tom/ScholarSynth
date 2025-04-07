@@ -32,7 +32,7 @@ This project implements a Retrieval-Augmented Generation (RAG) system designed t
 2. **Clone Repository:**
 
     ```bash
-    git clone <your-repository-url> # Replace with your actual repo URL if applicable
+    gh repo clone Mathews-Tom/ScholarSynth
     cd lit_review_assistant
     ```
 
