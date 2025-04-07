@@ -30,4 +30,5 @@ logs/
 # --- Data ---
 data/arxiv_pdfs/*
 data/local_pdfs/*
+data/parent_doc_store/*
 data/vector_store_db/*
