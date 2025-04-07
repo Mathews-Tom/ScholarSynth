@@ -1,0 +1,21 @@
+# Core Application & Frameworks
+python-dotenv         # For loading .env files
+streamlit             # For the web UI
+langchain             # Core LangChain framework
+langchain-openai      # LangChain integrations for OpenAI (LLMs, Embeddings)
+
+# LLM & Embeddings Provider
+openai                # OpenAI Python client library (underlying dependency)
+tiktoken              # Tokenizer used by OpenAI models
+
+# Vector Store
+chromadb              # Vector database client and server
+
+# Document Loading & Parsing
+pypdf                 # For loading and parsing PDF files (used by LangChain's PyPDFLoader)
+arxiv                 # Specific client library for interacting with the ArXiv API
+
+# Optional but Recommended
+# Add testing frameworks later if needed, e.g.:
+# pytest
+# pytest-cov
