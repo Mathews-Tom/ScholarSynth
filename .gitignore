@@ -1,0 +1,33 @@
+# --- Environment Files ---
+.DS_Store
+
+# Ignore the actual environment file containing secrets
+.env
+
+# --- Python ---
+# Virtual environment directory
+venv/
+*/venv/
+.venv/
+*/.venv/
+
+# Cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+
+# --- Logs ---
+*.log*
+logs/
+*.log
+
+# --- Data ---
+data/arxiv_pdfs/*
+data/local_pdfs/*
+data/vector_store_db/*
