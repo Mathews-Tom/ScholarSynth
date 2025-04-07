@@ -1,7 +1,7 @@
 import logging
 import sys
 from pathlib import Path  # Import Path
-from typing import List  # For type hints
+from typing import List, Optional  # For type hints
 
 # --- Add project root using pathlib ---
 # This file is in the root, so project_root is its directory
@@ -24,6 +24,15 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough
 from langchain_core.vectorstores import VectorStoreRetriever  # For type hinting
 from langchain_openai import ChatOpenAI
+
+# OpenAI error types for better error handling
+from openai import APIConnectionError, APIError, APITimeoutError, RateLimitError
+
+from utils.error_handling import (
+    ErrorHandlingCallbackHandler,
+    handle_error,
+    retry_with_exponential_backoff,
+)
 
 # Project-specific modules
 # Setup logging BEFORE other modules that use logging
@@ -69,15 +78,33 @@ def get_cached_embedding_model(
 ):  # Pass config to ensure cache invalidation if relevant config changes
     logger.info("Initializing embedding model...")
     try:
-        # We pass necessary config bits implicitly via get_embedding_model's internal config load
-        model = get_embedding_model()
+        # Use retry decorator for API calls that might fail due to rate limits or connection issues
+        @retry_with_exponential_backoff(max_retries=3)
+        def init_embeddings():
+            # We pass necessary config bits implicitly via get_embedding_model's internal config load
+            return get_embedding_model()
+
+        model = init_embeddings()
         logger.info("Embedding model initialized successfully.")
         return model
-    except Exception as e:
-        logger.error(f"Failed to initialize embedding model: {e}", exc_info=True)
-        st.error(
-            f"ERROR: Could not initialize embedding model. Please check OpenAI API key and configuration. Error: {e}"
+    except (APIConnectionError, APITimeoutError) as e:
+        # Handle connection-related errors
+        logger.error(
+            f"Connection error initializing embedding model: {e}", exc_info=True
         )
+        handle_error(e)
+        st.stop()
+        return None
+    except RateLimitError as e:
+        # Handle rate limit errors
+        logger.error(f"Rate limit exceeded for embedding model: {e}", exc_info=True)
+        handle_error(e)
+        st.stop()
+        return None
+    except Exception as e:
+        # Handle all other errors
+        logger.error(f"Failed to initialize embedding model: {e}", exc_info=True)
+        handle_error(e)
         st.stop()
         return None
 
@@ -124,36 +151,51 @@ def get_cached_vector_store(
     # --- End path check ---
 
     try:
-        # Pass the string path as expected by our modified get_vector_store wrapper
-        vector_store = get_vector_store(
-            persist_directory_str=persist_dir_str,  # Use the string from config
-            embedding_function=_embedding_model,
-        )
-        # Logging about path/count is handled inside get_vector_store now
-        count = (
-            vector_store._collection.count()
-        )  # Direct Chroma collection access might change
-        logger.info(
-            f"Vector store initialized from '{persist_path}'. Found {count} items."
-        )
-        if count == 0:
-            # This is a warning, not necessarily a fatal error if expecting an empty store initially
-            logger.warning(
-                f"Vector store loaded from '{persist_path}' but contains 0 items."
-            )
-            st.warning(
-                "Warning: Vector store initialized, but it appears to be empty. Ensure ingestion was successful if data is expected."
+        # Use retry decorator for operations that might fail due to temporary issues
+        @retry_with_exponential_backoff(max_retries=2)
+        def init_vector_store():
+            # Pass the string path as expected by our modified get_vector_store wrapper
+            return get_vector_store(
+                persist_directory_str=persist_dir_str,  # Use the string from config
+                embedding_function=_embedding_model,
             )
 
+        vector_store = init_vector_store()
+
+        # Safely get count for logging
+        try:
+            count = vector_store._collection.count()
+            logger.info(
+                f"Vector store initialized from '{persist_path}'. Found {count} items."
+            )
+
+            if count == 0:
+                # This is a warning, not necessarily a fatal error if expecting an empty store initially
+                logger.warning(
+                    f"Vector store loaded from '{persist_path}' but contains 0 items."
+                )
+                st.warning(
+                    "Warning: Vector store initialized, but it appears to be empty. "
+                    "Ensure ingestion was successful if data is expected."
+                )
+        except Exception as count_error:
+            logger.warning(f"Could not get item count from vector store: {count_error}")
+            # Continue anyway since this is not critical
+
         return vector_store
+    except (APIConnectionError, APITimeoutError) as e:
+        # Handle connection-related errors
+        logger.error(f"Connection error initializing vector store: {e}", exc_info=True)
+        handle_error(e)
+        st.stop()
+        return None
     except Exception as e:
+        # Handle all other errors
         logger.error(
             f"Failed to initialize vector store from '{persist_path}': {e}",
             exc_info=True,
         )
-        st.error(
-            f"ERROR: Could not initialize vector store from '{persist_path}'. Error: {e}"
-        )
+        handle_error(e)
         st.stop()
         return None
 
@@ -162,22 +204,39 @@ def get_cached_vector_store(
 def get_cached_llm(_config, streaming=True):  # Depends on config
     logger.info("Initializing Language Model...")
     try:
-        llm = ChatOpenAI(
-            model_name=_config.LLM_MODEL_NAME,
-            openai_api_key=_config.OPENAI_API_KEY,
-            temperature=0.1,  # Lower temperature for more factual/consistent answers
-            streaming=streaming,  # Enable streaming for token-by-token response
-            # max_tokens= # Optional: Limit response length
-        )
+
+        # Use retry decorator for API calls that might fail due to rate limits or connection issues
+        @retry_with_exponential_backoff(max_retries=3)
+        def init_llm():
+            return ChatOpenAI(
+                model_name=_config.LLM_MODEL_NAME,
+                openai_api_key=_config.OPENAI_API_KEY,
+                temperature=0.1,  # Lower temperature for more factual/consistent answers
+                streaming=streaming,  # Enable streaming for token-by-token response
+                # max_tokens= # Optional: Limit response length
+            )
+
+        llm = init_llm()
         logger.info(
             f"LLM '{_config.LLM_MODEL_NAME}' initialized successfully. Streaming: {streaming}"
         )
         return llm
+    except (APIConnectionError, APITimeoutError) as e:
+        # Handle connection-related errors
+        logger.error(f"Connection error initializing LLM: {e}", exc_info=True)
+        handle_error(e)
+        st.stop()
+        return None
+    except RateLimitError as e:
+        # Handle rate limit errors
+        logger.error(f"Rate limit exceeded for LLM: {e}", exc_info=True)
+        handle_error(e)
+        st.stop()
+        return None
     except Exception as e:
+        # Handle all other errors
         logger.error(f"Failed to initialize LLM: {e}", exc_info=True)
-        st.error(
-            f"ERROR: Could not initialize Language Model ({_config.LLM_MODEL_NAME}). Check API key and model name. Error: {e}"
-        )
+        handle_error(e)
         st.stop()
         return None
 
@@ -230,16 +289,32 @@ def format_docs(docs: List[Document]) -> str:
 
 
 def setup_rag_chain(retriever: VectorStoreRetriever, llm: ChatOpenAI):
-    """Creates the RAG chain using LCEL."""
+    """Creates the RAG chain using LCEL with error handling."""
     logger.debug("Setting up RAG chain...")
+
+    # Create a more robust prompt with error handling guidance
     prompt = PromptTemplate(
         template=RAG_PROMPT_TEMPLATE,
         input_variables=["context", "question"],
     )
 
+    # Create a more robust retrieval step with error handling
+    @retry_with_exponential_backoff(max_retries=2)
+    def retrieval_with_retry(query):
+        try:
+            return retriever.invoke(query)
+        except Exception as e:
+            logger.warning(f"Retrieval failed, falling back to empty context: {e}")
+            # Return an empty list as fallback to avoid complete failure
+            return []
+
     # Parallel Runnable to fetch context and pass question through
+    # Use the retry-enabled retrieval function
     setup_and_retrieval = RunnableParallel(
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        {
+            "context": lambda x: format_docs(retrieval_with_retry(x)),
+            "question": RunnablePassthrough(),
+        }
     )
 
     # The main RAG chain
@@ -413,11 +488,113 @@ def run_app():
 
         # Create a placeholder for the streaming response
         st.subheader("Answer:")
-        answer_placeholder = st.empty()
+
+        # Create a callback handler for error handling
+        error_handler = ErrorHandlingCallbackHandler()
 
         try:
-            # Initialize the response string
-            full_response = ""
+            # Retrieve documents for context
+            with st.spinner(
+                f"Searching relevant documents... (using k={k_value}, search='{search_type}')"
+            ):
+                try:
+                    # Use retry for retrieval operations
+                    @retry_with_exponential_backoff(max_retries=2)
+                    def retrieve_documents():
+                        return retriever.invoke(user_question)
+
+                    retrieved_docs = retrieve_documents()
+                except (APIConnectionError, APITimeoutError) as e:
+                    # Handle connection-related errors
+                    logger.error(
+                        f"Connection error during document retrieval: {e}",
+                        exc_info=True,
+                    )
+                    handle_error(e)
+                    return
+                except RateLimitError as e:
+                    # Handle rate limit errors
+                    logger.error(
+                        f"Rate limit exceeded during document retrieval: {e}",
+                        exc_info=True,
+                    )
+                    handle_error(e)
+                    return
+                except Exception as retrieval_error:
+                    logger.error(
+                        f"Error retrieving documents: {retrieval_error}", exc_info=True
+                    )
+                    handle_error(retrieval_error)
+                    return
+
+            # Create a placeholder for the streaming response
+            answer_placeholder = st.empty()
+
+            # Stream the response with error handling
+            try:
+                # Initialize the response string
+                full_response = ""
+
+                # Stream the response with the error handler callback
+                for chunk in rag_chain.stream(
+                    user_question, config={"callbacks": [error_handler]}
+                ):
+                    # Check if an error occurred during streaming
+                    if error_handler.has_error:
+                        break
+
+                    full_response += chunk
+                    answer_placeholder.markdown(full_response + "▌")
+
+                # If no errors occurred, display the final response
+                if not error_handler.has_error:
+                    answer_placeholder.markdown(full_response)
+            except (APIConnectionError, APITimeoutError) as e:
+                # Handle connection-related errors
+                logger.error(
+                    f"Connection error during LLM response generation: {e}",
+                    exc_info=True,
+                )
+                handle_error(e)
+                answer_placeholder.markdown(
+                    "⚠️ **Connection error occurred while generating the response.**"
+                )
+            except RateLimitError as e:
+                # Handle rate limit errors
+                logger.error(
+                    f"Rate limit exceeded during LLM response generation: {e}",
+                    exc_info=True,
+                )
+                handle_error(e)
+                answer_placeholder.markdown(
+                    "⚠️ **Rate limit exceeded. Please try again in a moment.**"
+                )
+            except Exception as e:
+                # Handle all other errors
+                logger.error(
+                    f"Error during LLM response generation: {e}", exc_info=True
+                )
+                handle_error(e)
+                answer_placeholder.markdown(
+                    "⚠️ **An error occurred while generating the response.**"
+                )
+
+                # Optionally display retrieved documents for verification
+                st.markdown("---")
+                with st.expander("Show Retrieved Context Documents"):
+                    # Retrieve documents again using the current retriever settings
+                    retrieved_docs = retriever.invoke(user_question)
+                    if retrieved_docs:
+                        st.markdown(
+                            f"Retrieved {len(retrieved_docs)} chunks for context:"
+                        )
+                        for i, doc in enumerate(retrieved_docs):
+                            # Access potential retrieval score if available (depends on vector store implementation)
+                            score = doc.metadata.get("_score", None)
+                            score_str = (
+                                f" (Score: {score:.4f})" if score is not None else ""
+                            )
+                            st.markdown(f"**Chunk {i + 1}{score_str}**")
 
             # Stream the response
             for chunk in rag_chain.stream(user_question):
@@ -516,11 +693,37 @@ def run_app():
                 else:
                     st.markdown("No documents were retrieved for this query.")
 
+        except (APIConnectionError, APITimeoutError) as e:
+            # Handle connection-related errors
+            logger.error(
+                f"Connection error processing question '{user_question}': {e}",
+                exc_info=True,
+            )
+            handle_error(e)
+            st.error(
+                "⚠️ **Connection error occurred.** Please check your internet connection and try again."
+            )
+        except RateLimitError as e:
+            # Handle rate limit errors
+            logger.error(
+                f"Rate limit exceeded for question '{user_question}': {e}",
+                exc_info=True,
+            )
+            handle_error(e)
+            st.error(
+                "⚠️ **Rate limit exceeded.** The system is currently experiencing high demand. "
+                "Please wait a moment and try again."
+            )
         except Exception as e:
+            # Handle all other errors
             logger.error(
                 f"Error processing user question '{user_question}': {e}", exc_info=True
             )
-            st.error(f"An error occurred while processing your question: {e}")
+            handle_error(e)
+            st.error(
+                f"⚠️ **An error occurred while processing your question.** "
+                f"Please try rephrasing or ask a different question."
+            )
 
     # --- Footer/Info ---
     st.sidebar.markdown("---")
