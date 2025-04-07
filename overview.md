@@ -86,11 +86,28 @@ GenAI's analysis is primarily pattern-based and lacks true comprehension. It str
 - **Fine-tuning:** Less critical for general literature reviews but potentially valuable for highly specialized fields. Fine-tuning a model on a large corpus of papers and reviews from a narrow domain (e.g., specific subfield of genomics, materials science) could improve its understanding of niche terminology, common methodologies, and relevant theoretical frameworks within that field. However, it's resource-intensive and may not offer significant advantages over well-executed RAG for broader reviews.
 - **From Scratch:** Impractical and unnecessary. Building a foundation model capable of this requires immense resources. Leveraging existing models via prompting and RAG is the most efficient and effective path.
 
+### Advanced RAG Techniques Implemented
+
+- **Parent Document Retriever:** Our implementation uses an advanced RAG technique that retrieves smaller, more focused chunks for precise matching but provides the LLM with the larger parent document they came from for better context. This approach helps solve the common RAG tradeoff between retrieval precision and context richness.
+  - *Small Chunks for Retrieval:* Using smaller chunks (e.g., 500 characters) allows for more precise matching to the user's query.
+  - *Large Parent Documents for Context:* Instead of just returning the small chunks, the system provides the larger parent documents (e.g., 2000 characters) that contain those chunks, giving the LLM more context to work with.
+  - *Implementation:* The system maintains both a vector store for the small chunks and a document store for the parent documents, with references connecting them.
+
 ### Implementation Considerations
 
 - Requires access to academic databases (potentially via institutional subscriptions or APIs).
 - Needs user proficiency in prompt engineering and critically evaluating AI outputs.
 - Integration into existing workflows (e.g., reference managers like Zotero, EndNote) is desirable.
+
+### Enhanced User Experience Features
+
+- **Streaming Responses:** The system delivers LLM responses token by token in real-time, providing immediate feedback and a more engaging user experience compared to waiting for complete responses.
+- **Conversation History:** The application maintains a session-based conversation history, allowing users to refer back to previous questions and answers, and enabling more natural follow-up questions.
+- **Interactive Source Exploration:** Users can explore the source documents that inform the AI's responses through an interactive interface that displays document metadata, content snippets, and references.
+- **Configurable Retrieval Settings:** Users can customize their experience by adjusting retrieval parameters such as:
+  - *Retriever Type:* Choose between standard retrieval or the advanced Parent Document Retriever.
+  - *Number of chunks (k):* Control how many document chunks are retrieved for each query.
+  - *Search Type:* Select between similarity search or Maximal Marginal Relevance (MMR) for more diverse results.
 
 Figure below illustrates the typical architecture of such a RAG system designed to assist with literature reviews:
 
@@ -277,7 +294,7 @@ Based on the provided articles, here are the major recurring themes impacting em
 
 **Researcher's Goal:** Integrate the AI-generated summaries and themes into a coherent paragraph for the literature review, adding critical analysis and synthesis.
 
-_Note: Reasearcher starts with AI Output mentally or pasted into a document._
+**Note:** Researcher starts with AI Output mentally or pasted into a document.
 
 **Human Researcher's Refined Paragraph (incorporating insights from AI output but adding depth):**
 
