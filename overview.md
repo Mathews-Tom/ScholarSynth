@@ -105,7 +105,7 @@ graph TD
         UI[User Interface / Research Assistant Tool]
 
         %% Define the RAG CORE subgraph (nested inside Main System)
-        subgraph RAG System Core 
+        subgraph RAG System Core
             direction TB
 
             %% Input Processing within RAG Core
@@ -131,7 +131,7 @@ graph TD
             LLM -->|Step 9: Generates Response based on Augmented Prompt| GM
             GM -->|Step 10: Structures & Formats Output| O
         %% End of RAG System Core subgraph
-        end 
+        end
 
         %% User Interaction Flow (Defined within Main System, connecting outer components and the inner subgraph)
         %% Note: Connections involving subgraph nodes (QP, O) must be defined AFTER the subgraph definition
@@ -198,6 +198,8 @@ GenAI can automate or significantly assist with a large proportion of the *time-
 ## Conclusion
 
 Generative AI, particularly when implemented using a Retrieval-Augmented Generation (RAG) approach, offers a powerful toolkit to significantly augment and accelerate the literature review process for Research Scientists. It can handle much of the laborious searching, filtering, and summarization involved (**Mostly, 80%+ assistance** on the overall task duration/effort).
+
+The ScholarSynth implementation demonstrates how advanced RAG techniques like the Parent Document Retriever can enhance the quality of AI-generated responses by providing better context while maintaining precise retrieval. The user experience improvements—streaming responses, conversation history, and interactive source exploration—make the system more engaging, intuitive, and transparent, addressing key concerns about AI-assisted research such as citation verification and context understanding. Additionally, the robust error handling mechanisms ensure that the system remains reliable even when facing API connection issues, rate limits, or other potential failures, providing clear feedback to users and gracefully recovering from errors.
 
 However, GenAI cannot replace the essential human elements of deep critical appraisal, nuanced synthesis, identification of subtle knowledge gaps, and the formulation of original insights based on the review. The final output's quality, integrity, and intellectual contribution remain dependent on the researcher's expertise and critical engagement. Successful integration requires viewing GenAI as an advanced assistant, demanding careful validation and thoughtful incorporation into the research workflow, rather than a complete replacement for human intellect and judgment.
 
